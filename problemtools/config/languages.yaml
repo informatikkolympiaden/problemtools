@@ -98,84 +98,84 @@ c:
     name: 'C'
     priority: 950
     files: '*.c'
-    compile: '/usr/bin/gcc -g -O2 -std=gnu99 -static -o {binary} {files} -lm'
+    compile: '/usr/bin/env gcc -g -O2 -std=gnu99 -static -o {binary} {files} -lm'
     run: '{binary}'
 
 cpp:
     name: 'C++'
     priority: 1000
     files: '*.cc *.C *.cpp *.cxx *.c++'
-    compile: '/usr/bin/g++ -g -O2 -std=gnu++17 -static -o {binary} {files}'
+    compile: '/usr/bin/env g++ -g -O2 -std=gnu++17 -static -o {binary} {files}'
     run: '{binary}'
 
 csharp:
     name: 'C#'
     priority: 700
     files: '*.cs'
-    compile: '/usr/bin/mcs -out:{binary}.exe -optimize+ -r:System.Numerics {files}'
-    run: '/usr/bin/mono {binary}.exe'
+    compile: '/usr/bin/env mcs -out:{binary}.exe -optimize+ -r:System.Numerics {files}'
+    run: '/usr/bin/env mono {binary}.exe'
 
 cobol:
     name: 'Cobol'
     priority: 50
     files: '*.cob'
-    compile: '/usr/bin/cobc -o {binary} -g -O2 -std=default -free -x -static {files}'
+    compile: '/usr/bin/env cobc -o {binary} -g -O2 -std=default -free -x -static {files}'
     run: '{binary}'
 
 fsharp:
     name: 'F#'
     priority: 675
     files: '*.fs'
-    compile: '/usr/bin/fsharpc --out:{binary}.exe --optimize+ -r:System.Numerics {files}'
-    run: '/usr/bin/mono {binary}.exe'
+    compile: '/usr/bin/env fsharpc --out:{binary}.exe --optimize+ -r:System.Numerics {files}'
+    run: '/usr/bin/env mono {binary}.exe'
 
 go:
     name: 'Go'
     priority: 400
     files: '*.go'
-    compile: '/usr/bin/gccgo -g -o {binary} -static-libgcc {files}'
+    compile: '/usr/bin/env gccgo -g -o {binary} -static-libgcc {files}'
     run: '{binary}'
 
 haskell:
     name: 'Haskell'
     priority: 600
     files: '*.hs *.c'
-    compile: '/usr/bin/ghc -O2 -ferror-spans -threaded -rtsopts -tmpdir {path} -o {binary} {files}'
+    compile: '/usr/bin/env ghc -O2 -ferror-spans -threaded -rtsopts -tmpdir {path} -o {binary} {files}'
     run: '{binary} +RTS -M{memlim}m -K8m -RTS'
 
 java:
     name: 'Java'
     priority: 800
     files: '*.java'
-    compile: '/usr/bin/javac -encoding UTF-8 -sourcepath {path} -d {path} {files}'
-    run: '/usr/bin/java -Dfile.encoding=UTF-8 -XX:+UseSerialGC -Xss64m -Xms{memlim}m -Xmx{memlim}m -cp {path} {mainclass}'
+    compile: '/usr/bin/env javac -encoding UTF-8 -sourcepath {path} -d {path} {files}'
+    run: '/usr/bin/env java -Dfile.encoding=UTF-8 -XX:+UseSerialGC -Xss64m -Xms{memlim}m -Xmx{memlim}m -cp {path} {mainclass}'
 
 javascript:
     name: 'JavaScript'
     priority: 500
     files: '*.js'
-    compile: '/usr/bin/nodejs -c {files}'
-    run: '/usr/bin/nodejs "{mainfile}"'
+    compile: '/usr/bin/env nodejs -c {files}'
+    run: '/usr/bin/env nodejs "{mainfile}"'
 
 kotlin:
     name: 'Kotlin'
     priority: 250
     files: '*.kt'
-    compile: '/usr/bin/kotlinc -d {path}/ -- {files}'
-    run: '/usr/bin/kotlin -Dfile.encoding=UTF-8 -J-XX:+UseSerialGC -J-Xss64m -J-Xms{memlim}m -J-Xmx{memlim}m -cp {path}/ {Mainclass}Kt'
+    compile: '/usr/bin/env kotlinc -d {path}/ -- {files}'
+    run: '/usr/bin/env kotlin -Dfile.encoding=UTF-8 -J-XX:+UseSerialGC -J-Xss64m -J-Xms{memlim}m -J-Xmx{memlim}m -cp {path}/ {Mainclass}Kt'
 
 lisp:
     name: 'Common Lisp'
     priority: 200
     files: '*.lisp *.cl'
-    compile: '/usr/bin/sbcl --noinform --noprint --non-interactive --eval ''(if (equal (compile-file "{mainfile}") NIL) (sb-ext:exit :code 43) ())'' '
-    run: '/usr/bin/sbcl --noinform --non-interactive --load "{mainfile}"'
+    compile: '/usr/bin/env sbcl --noinform --noprint --non-interactive --eval ''(if (equal (compile-file "{mainfile}") NIL) (sb-ext:exit :code 43) ())'' '
+    run: '/usr/bin/env sbcl --noinform --non-interactive --load "{mainfile}"'
 
 ocaml:
     name: 'OCaml'
     priority: 375
     files: '*.ml'
-    compile: '/usr/bin/ocamlopt -o {binary} unix.cmxa str.cmxa bigarray.cmxa {files}'
+    compile: '/usr/bin/env ocamlopt -o {binary} unix.cmxa str.cmxa bigarray.cmxa {files}'
     run: '{binary}'
 
 objectivec:
@@ -183,28 +183,28 @@ objectivec:
     priority: 300
     files: '*.m *.c'
     # The postargs for the compile command are '-lm -lobjc `gnustep-config --objc-flags` -lgnustep-base -o {binary}', edited to remove -I. and -I(home dir of user running the command), and to remove duplicate definition of GNUSTEP_BASE_LIBRARY
-    compile: '/usr/bin/gcc -O2 -std=gnu99 {files} -lm -lobjc -MMD -MP -DGNUSTEP -DGNUSTEP_BASE_LIBRARY=2 -DGNU_GUI_LIBRARY=1 -DGNU_RUNTIME=1 -fno-strict-aliasing -fexceptions -fobjc-exceptions -D_NATIVE_OBJC_EXCEPTIONS -fPIC -Wall -DGSWARN -DGSDIAGNOSE -Wno-import -g -O2 -fstack-protector --param=ssp-buffer-size=4 -D_FORTIFY_SOURCE=2 -Wformat -Wformat-security -Werror=format-security -fgnu-runtime -fconstant-string-class=NSConstantString -I/usr/local/include/GNUstep -I/usr/include/GNUstep -lgnustep-base -o {binary}'
+    compile: '/usr/bin/env gcc -O2 -std=gnu99 {files} -lm -lobjc -MMD -MP -DGNUSTEP -DGNUSTEP_BASE_LIBRARY=2 -DGNU_GUI_LIBRARY=1 -DGNU_RUNTIME=1 -fno-strict-aliasing -fexceptions -fobjc-exceptions -D_NATIVE_OBJC_EXCEPTIONS -fPIC -Wall -DGSWARN -DGSDIAGNOSE -Wno-import -g -O2 -fstack-protector --param=ssp-buffer-size=4 -D_FORTIFY_SOURCE=2 -Wformat -Wformat-security -Werror=format-security -fgnu-runtime -fconstant-string-class=NSConstantString -I/usr/local/include/GNUstep -I/usr/include/GNUstep -lgnustep-base -o {binary}'
     run: '{binary}'
 
 pascal:
     name: 'Pascal'
     priority: 350
     files: '*.pas'
-    compile: '/usr/bin/fpc -o"{mainfile}.out" -O2 -XS -Xt "{mainfile}"'
+    compile: '/usr/bin/env fpc -o"{mainfile}.out" -O2 -XS -Xt "{mainfile}"'
     run: '"{mainfile}.out"'
 
 php:
     name: 'PHP'
     priority: 450
     files: '*.php'
-    compile: '/usr/bin/php -n -d display_errors=stderr -d html_errors=0 -l {files}'
-    run: '/usr/bin/php -n -d display_errors=stderr -d html_errors=0 -d memory_limit={memlim}m -f "{mainfile}"'
+    compile: '/usr/bin/env php -n -d display_errors=stderr -d html_errors=0 -l {files}'
+    run: '/usr/bin/env php -n -d display_errors=stderr -d html_errors=0 -d memory_limit={memlim}m -f "{mainfile}"'
 
 prolog:
     name: 'Prolog'
     priority: 100
     files: '*.pl'
-    compile: '/usr/bin/swipl -O -q -g main -t halt -o {binary} -c {files}'
+    compile: '/usr/bin/env swipl -O -q -g main -t halt -o {binary} -c {files}'
     run: '{binary}'
 
 # Python2 with shebang comes before default python3.
@@ -213,23 +213,23 @@ python2_with_shebang:
     priority: 860
     files: '*.py *.py2'
     shebang: '^#!.*python2\b'
-    compile: '/usr/bin/python2 -m py_compile {files}'
-    run: '/usr/bin/python2 "{mainfile}"'
+    compile: '/usr/bin/env python2 -m py_compile {files}'
+    run: '/usr/bin/env python2 "{mainfile}"'
 
 python3:
     name: 'Python 3'
     priority: 850
     files: '*.py *.py3'
-    compile: '/usr/bin/python3 -m py_compile {files}'
-    run: '/usr/bin/python3 "{mainfile}"'
+    compile: '/usr/bin/env python3 -m py_compile {files}'
+    run: '/usr/bin/env python3 "{mainfile}"'
 
 # Python2 without shebang comes after python3.
 python2:
     name: 'Python 2'
     priority: 840
     files: '*.py2'
-    compile: '/usr/bin/python2 -m py_compile {files}'
-    run: '/usr/bin/python2 "{mainfile}"'
+    compile: '/usr/bin/env python2 -m py_compile {files}'
+    run: '/usr/bin/env python2 "{mainfile}"'
 
 ruby:
     name: 'Ruby'
@@ -238,19 +238,19 @@ ruby:
     # Note that this compile command only syntax-checks the main file --
     # unfortunately the ruby -c command does not provide the option to
     # syntax-check multiple files.
-    compile: '/usr/bin/ruby -c "{mainfile}"'
-    run: '/usr/bin/ruby "{mainfile}"'
+    compile: '/usr/bin/env ruby -c "{mainfile}"'
+    run: '/usr/bin/env ruby "{mainfile}"'
 
 rust:
     name: 'Rust'
     priority: 575
     files: '*.rs'
-    compile: '/usr/bin/rustc -o{binary} -O --crate-type bin --edition=2018 {files}'
+    compile: '/usr/bin/env rustc -o{binary} -O --crate-type bin --edition=2018 {files}'
     run: '{binary}'
 
 scala:
     name: 'Scala'
     priority: 550
     files: '*.sc *.scala'
-    compile: '/usr/bin/scalac -encoding UTF-8 -sourcepath {path} -d {path} {files}'
-    run: '/usr/bin/scala -J-Xmx{memlim}m -classpath {path} {mainclass}'
+    compile: '/usr/bin/env scalac -encoding UTF-8 -sourcepath {path} -d {path} {files}'
+    run: '/usr/bin/env scala -J-Xmx{memlim}m -classpath {path} {mainclass}'
