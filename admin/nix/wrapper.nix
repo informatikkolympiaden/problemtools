@@ -26,6 +26,6 @@ let
 in
 
 pkgs.writeShellScript "verifyproblem-env" ''
-    export PATH="${env}/bin:$PATH"
+    export PATH="${env}/bin:${pkgs.gcc}/bin:$PATH"
     "$@"
 ''
