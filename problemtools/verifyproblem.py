@@ -63,7 +63,7 @@ class SubmissionResult:
         verdict = self.verdict
         details = []
 
-        if verdict == 'AC' and self.score is not None:
+        if verdict in ['AC', 'PAC'] and self.score is not None:
             verdict += f' ({self.score:.0f})'
 
         if self.reason is not None:
@@ -289,11 +289,11 @@ class TestCase(ProblemAspect):
         res = copy.copy(res)
         res.testcase = self
         res.runtime_testcase = self
-        if res.score is None:
+        if res.score is None and self._problem.is_scoring:
             if res.verdict == 'AC':
-                res.score = self.testcasegroup.config['accept_score']
+                res.score = self.testcasegroup.config['grading']['score']
             else:
-                res.score = self.testcasegroup.config['reject_score']
+                res.score = 0.0
         return res
 
     def get_all_testcases(self) -> list[TestCase]:
@@ -305,13 +305,16 @@ class TestCase(ProblemAspect):
 
 class TestCaseGroup(ProblemAspect):
     _DEFAULT_CONFIG = config.load_config('testdata.yaml')
-    _SCORING_ONLY_KEYS = ['accept_score', 'reject_score', 'range']
+    _SCORING_ONLY_KEYS = ['grading']
 
     def __init__(self, problem: Problem, datadir: str, parent: TestCaseGroup|None=None):
         self._parent = parent
         self._problem = problem
         self._datadir = datadir
         self._seen_oob_scores = False
+        self._is_data = parent is None
+        self._is_sample = parent is not None and parent._is_data and self.name() == "sample"
+        self._is_secret = parent is not None and parent._is_data and self.name() == "secret"
         self.debug(f'  Loading test data group {datadir}')
         configfile = os.path.join(self._datadir, 'testdata.yaml')
         self.config = {}
@@ -329,18 +332,6 @@ class TestCaseGroup(ProblemAspect):
             for field, parent_value in parent.config.items():
                 if not field in self.config:
                     self.config[field] = parent_value
-
-        # Some deprecated properties are inherited from problem config during a transition period
-        problem_grading = problem.config.get('grading')
-        for key in ['accept_score', 'reject_score', 'range']:
-            if key in problem.config.get('grading'):
-                self.config[key] = problem_grading[key]
-
-        problem_on_reject = problem_grading.get('on_reject')
-        if problem_on_reject == 'first_error':
-            self.config['on_reject'] = 'break'
-        if problem_on_reject == 'grade':
-            self.config['on_reject'] = 'continue'
 
         if self._problem.config.get('type') == 'pass-fail':
             for key in TestCaseGroup._SCORING_ONLY_KEYS:
@@ -361,6 +352,27 @@ class TestCaseGroup(ProblemAspect):
                     base, ext = os.path.splitext(filename)
                     if ext == '.ans' and os.path.isfile(f'{base}.in'):
                         self._items.append(TestCase(problem, base, self))
+
+        # Set default grading options
+        if self._problem.config.get('type') == 'scoring':
+            if self._is_data or self._is_secret:
+                if 'score' not in self.config['grading']:
+                    self.config['grading']['score'] = 1
+                if 'aggregation' not in self.config['grading']:
+                    self.config['grading']['aggregation'] = 'sum'
+            elif self._is_sample:
+                if 'score' not in self.config['grading']:
+                    self.config['grading']['score'] = 0
+                if 'aggregation' not in self.config['grading']:
+                    self.config['grading']['aggregation'] = 'sum'
+            else:
+                if 'score' not in self.config['grading']:
+                    self.config['grading']['score'] = 1
+                if 'aggregation' not in self.config['grading']:
+                    self.config['grading']['aggregation'] = 'min'
+
+            if 'max_score' not in self.config['grading']:
+                self.config['grading']['max_score'] = self.compute_max_score()             
 
         if not parent:
             self.set_symlinks()
@@ -396,15 +408,18 @@ class TestCaseGroup(ProblemAspect):
     def has_custom_groups(self) -> bool:
         return any(group.get_subgroups() for group in self.get_subgroups())
 
+    def get_max_score(self) -> float:
+        return self.config['grading']['max_score']
 
-    def get_score_range(self) -> tuple[float, float]:
-        try:
-            score_range = self.config['range']
-            min_score, max_score = list(map(float, score_range.split()))
-            return (min_score, max_score)
-        except:
-            return (float('-inf'), float('inf'))
+    def compute_max_score(self) -> float:
+        score = self.config['grading']['score']
+        if self.config['grading']['aggregation'] == 'sum':
+            return sum([score for _ in self.get_testcases()] + [group.get_max_score() for group in self.get_subgroups()])
+        elif self.config['grading']['aggregation'] == 'min':
+            return min([score for _ in self.get_testcases()] + [group.get_max_score() for group in self.get_subgroups()])
 
+    def name(self) -> str:
+        return os.path.basename(self._datadir)
 
     def check(self, args: argparse.Namespace) -> bool:
         if self._check_res is not None:
@@ -412,20 +427,6 @@ class TestCaseGroup(ProblemAspect):
         self._check_res = True
 
         self.check_basename(self._datadir)
-
-        if self.config['grading'] not in ['default', 'custom']:
-            self.error("Invalid grading policy in testdata.yaml")
-
-        if self.config['grading'] == 'custom' and len(self._problem.graders._graders) == 0:
-            self._problem.graders.error(f'{self} has custom grading but no custom graders provided')
-        if self.config['grading'] == 'default' and Graders._default_grader is None:
-            self._problem.graders.error(f'{self} has default grading but I could not find default grader')
-
-        if self.config['grading'] == 'default' and 'ignore_sample' in self.config['grader_flags'].split():
-            if self._parent is not None:
-                self.error("'grader_flags: ignore_sample' is specified, but that flag is only allowed at top level")
-            elif self.config['on_reject'] == 'break':
-                self.error("'grader_flags: ignore_sample' is specified, but 'on_reject: break' may cause secret data not to be judged")
 
         for field in self.config.keys():
             if field not in TestCaseGroup._DEFAULT_CONFIG.keys():
@@ -436,20 +437,16 @@ class TestCaseGroup(ProblemAspect):
                 if self.config.get(key) is not None:
                     self.error(f"Key '{key}' is only applicable for scoring problems, this is a pass-fail problem")
 
-        if self.config['on_reject'] not in ['break', 'continue']:
-            self.error(f"Invalid value '{self.config['on_reject']}' for on_reject policy")
-
         if self._problem.is_scoring:
             # Check grading
-            try:
-                score_range = self.config['range']
-                min_score, max_score = list(map(float, score_range.split()))
-                if min_score > max_score:
-                    self.error(f"Invalid score range '{score_range}': minimum score cannot be greater than maximum score")
-            except VerifyError:
-                raise
-            except:
-                self.error(f"Invalid format '{score_range}' for range: must be exactly two floats")
+            grading = self.config['grading']
+            if grading['aggregation'] not in ['sum', 'min']:
+                self.error(f"Invalid aggregation type '{grading['aggregation']}'")
+
+            if self.compute_max_score() > self.get_max_score():
+                self.warning(f"Score can be higher than max score")
+            if self.compute_max_score() < self.get_max_score():
+                self.warning(f"Max score is not archivable")
 
         if self._parent is None:
             seen_secret = False
@@ -547,7 +544,6 @@ class TestCaseGroup(ProblemAspect):
         subres_low: list[SubmissionResult] = []
         subres_high: list[SubmissionResult] = []
         active_low, active = True, True
-        on_reject = self.config['on_reject']
         for child in self._items:
             if not child.matches_filter(args.data_filter):
                 continue
@@ -557,13 +553,11 @@ class TestCaseGroup(ProblemAspect):
                 subres.append(res)
             if active_low:
                 subres_low.append(res_low)
-            if on_reject == 'break':
-                active_low &= res_low.verdict == 'AC'
-                active &= res.verdict == 'AC'
-                if res_high.verdict != 'AC':
-                    break
 
-        return (self.aggregate_results(sub, subres),
+        res = self.aggregate_results(sub, subres)
+        self.info(f"Test group result: {res}")
+
+        return (res,
                 self.aggregate_results(sub, subres_low, shadow_result=True),
                 self.aggregate_results(sub, subres_high, shadow_result=True))
 
@@ -586,22 +580,36 @@ class TestCaseGroup(ProblemAspect):
             res.reason = judge_error.reason
             res.additional_info = judge_error.additional_info
             res.testcase = judge_error.testcase
-        else:
-            res.verdict, score = self._problem.graders.grade(sub_results, self, shadow_result)
-            if sub_results:
-                res.testcase = sub_results[-1].testcase
-                res.additional_info = sub_results[-1].additional_info
-            if self._problem.is_scoring:
-                res.score = score
-                min_score, max_score = self.get_score_range()
-                if score is not None and not (min_score <= score <= max_score) and not self._seen_oob_scores:
-                    # Don't warn twice on the same subgroup, since every submission is likely
-                    # to have the same error.
-                    self._seen_oob_scores = True
-                    groupname = os.path.relpath(self._datadir, self._problem.probdir)
-                    self.error(f'submission {sub} got {res} on group {groupname}, which is outside of expected score range [{min_score}, {max_score}]')
-        return res
+            return res
 
+        if sub_results:
+            res.testcase = sub_results[-1].testcase
+            res.additional_info = sub_results[-1].additional_info
+
+        if not self._problem.is_scoring:
+            res.verdict = ([res.verdict for res in sub_results if rews.verdict != 'AC'] + ['AC'])[0]
+
+        else:
+            if self.config['grading']['aggregation'] == 'min':
+                res.verdict = ([subres.verdict for subres in sub_results if subres.verdict != 'AC'] + ['AC'])[0]
+                res.score= min([subres.score for subres in sub_results])
+            elif self.config['grading']['aggregation'] == 'sum':
+                if all([subres.verdict == 'AC' for subres in sub_results]):
+                    res.verdict = 'AC'
+                elif all([subres.verdict not in ['AC', 'PAC'] for subres in sub_results]):
+                    res.verdict = sub_results[0].verdict
+                else:
+                    res.verdict = 'AC'
+                res.score = sum([subres.score for subres in sub_results])
+                
+            max_score = self.get_max_score()
+            if res.score is not None and not (res.score <= max_score) and not self._seen_oob_scores:
+                # Don't warn twice on the same subgroup, since every submission is likely
+                # to have the same error.
+                self._seen_oob_scores = True
+                groupname = os.path.relpath(self._datadir, self._problem.probdir)
+                self.error(f'submission {sub} got {res} on group {groupname}, which is more than the maximum score {max_score}')
+        return res
 
     def all_datasets(self) -> list:
         res: list = []
@@ -721,25 +729,8 @@ class ProblemConfig(ProblemAspect):
         elif self._data['license'] == 'unknown':
             self.warning("License is 'unknown'")
 
-        if self._data['grading']['show_test_data_groups'] not in [True, False]:
-            self.error(f"Invalid value for grading.show_test_data_groups: {self._data['grading']['show_test_data_groups']}")
-        elif self._data['grading']['show_test_data_groups'] and self._data['type'] == 'pass-fail':
-            self.error("Showing test data groups is only supported for scoring problems, this is a pass-fail problem")
         if self._data['type'] != 'pass-fail' and self._problem.testdata.has_custom_groups() and 'show_test_data_groups' not in self._origdata.get('grading', {}):
             self.warning("Problem has custom test case groups, but does not specify a value for grading.show_test_data_groups; defaulting to false")
-
-        if 'on_reject' in self._data['grading']:
-            if self._data['type'] == 'pass-fail' and self._data['grading']['on_reject'] == 'grade':
-                self.error(f"Invalid on_reject policy '{self._data['grading']['on_reject']}' for problem type '{self._data['type']}'")
-            if not self._data['grading']['on_reject'] in ['first_error', 'worst_error', 'grade']:
-                self.error(f"Invalid value '{self._data['grading']['on_reject']}' for on_reject policy")
-
-        if self._data['grading']['objective'] not in ['min', 'max']:
-            self.error(f"Invalid value '{self._data['grading']['objective']}' for objective")
-
-        for deprecated_grading_key in ['accept_score', 'reject_score', 'range', 'on_reject']:
-            if deprecated_grading_key in self._data['grading']:
-                self.warning(f"Grading key '{deprecated_grading_key}' is deprecated in problem.yaml, use '{deprecated_grading_key}' in testdata.yaml instead")
 
         if not self._data['validation-type'] in ['default', 'custom']:
             self.error(f"Invalid value '{self._data['validation']}' for validation, first word must be 'default' or 'custom'")
@@ -1273,94 +1264,6 @@ class InputFormatValidators(ProblemAspect):
                     out for out in [validator_stdout, validator_stderr] if out)
                 testcase.error(emsg, validator_output)
 
-
-class Graders(ProblemAspect):
-    _default_grader = run.get_tool('default_grader')
-
-    def __init__(self, problem: Problem):
-        self._problem = problem
-        self._graders: list = run.find_programs(os.path.join(problem.probdir, 'graders'),
-                                          language_config=problem.language_config,
-                                          work_dir=problem.tmpdir)
-
-    def __str__(self) -> str:
-        return 'graders'
-
-    def check(self, args: argparse.Namespace) -> bool:
-        if self._check_res is not None:
-            return self._check_res
-        self._check_res = True
-
-        if self._problem.config.get('type') == 'pass-fail' and len(self._graders) > 0:
-            self.error('There are grader programs but the problem is pass-fail')
-
-        for grader in self._graders:
-            success, msg = grader.compile()
-            if not success:
-                self.error(f'Compile error for {grader}', msg)
-        return self._check_res
-
-    def grade(self, sub_results: list[SubmissionResult], testcasegroup: TestCaseGroup, shadow_result: bool=False) -> tuple[Verdict, float|None]:
-
-        if testcasegroup.config['grading'] == 'default':
-            graders = [self._default_grader]
-        else:
-            graders = self._graders
-
-        grader_input = ''.join([f'{r.verdict} {0 if r.score is None else r.score}\n' for r in sub_results])
-        grader_output_re = r'^((AC)|(WA)|(TLE)|(RTE)|(JE))\s+-?[0-9.]+\s*$'
-        verdict: Verdict = 'AC'
-        score: float = 0
-
-        if not sub_results:
-            self.info('No results on %s, so no graders ran' % (testcasegroup,))
-            return (verdict, score)
-
-        grader_flags = testcasegroup.config['grader_flags'].split()
-        self.debug(f'Grading {len(sub_results)} results:\n{grader_input}')
-        self.debug(f'Grader flags: {grader_flags}')
-
-        for grader in graders:
-            if grader is not None and grader.compile()[0]:
-                fd, infile = tempfile.mkstemp()
-                os.close(fd)
-                fd, outfile = tempfile.mkstemp()
-                os.close(fd)
-
-                open(infile, 'w').write(grader_input)
-
-                status, runtime = grader.run(infile, outfile,
-                                             args=grader_flags)
-
-                grader_output = open(outfile, 'r').read()
-                os.remove(infile)
-                os.remove(outfile)
-                if not os.WIFEXITED(status):
-                    self.error(f'Judge error: {grader} crashed')
-                    self.debug(f'Grader input:\n{grader_input}')
-                    return ('JE', None)
-                ret = os.WEXITSTATUS(status)
-                if ret != 0:
-                    self.error(f'Judge error: exit code {ret} for grader {grader}, expected 0')
-                    self.debug(f'Grader input: {grader_input}\n')
-                    return ('JE', None)
-
-                if not re.match(grader_output_re, grader_output):
-                    self.error('Judge error: invalid format of grader output')
-                    self.debug(f'Output must match: "{grader_output_re}"')
-                    self.debug(f'Output was: "{grader_output}"')
-                    return ('JE', None)
-
-                verdict, score_str = grader_output.split()
-                score = float(score_str)
-        # TODO: check that all graders give same result
-
-        if not shadow_result:
-            self.info(f'Grade on {testcasegroup} is {verdict} ({score})')
-
-        return (verdict, score)
-
-
 class OutputValidators(ProblemAspect):
     _default_validator = run.get_tool('default_validator')
 
@@ -1636,16 +1539,12 @@ class Submissions(ProblemAspect):
         return result
 
     def full_score_finite(self) -> bool:
-        min_score, max_score = self._problem.testdata.get_score_range()
-        if self._problem.config.get('grading')['objective'] == 'min':
-            return min_score != float('-inf')
-        else:
-            return max_score != float('inf')
+        max_score = self._problem.testdata.get_max_score();
+        return max_score != float('inf')
 
     def fully_accepted(self, result: SubmissionResult) -> bool:
-        min_score, max_score = self._problem.testdata.get_score_range()
-        best_score = min_score if self._problem.config.get('grading')['objective'] == 'min' else max_score
-        return result.verdict == 'AC' and (not self._problem.is_scoring or result.score == best_score)
+        max_score = self._problem.testdata.get_max_score()
+        return result.verdict == 'AC' and (not self._problem.is_scoring or result.score == max_score)
 
     def check(self, args: argparse.Namespace) -> bool:
         if self._check_res is not None:
@@ -1710,7 +1609,7 @@ class Submissions(ProblemAspect):
 
         return self._check_res
 
-PROBLEM_PARTS = ['config', 'statement', 'validators', 'graders', 'generators', 'data', 'submissions']
+PROBLEM_PARTS = ['config', 'statement', 'validators', 'generators', 'data', 'submissions']
 
 class Problem(ProblemAspect):
     def __init__(self, probdir: str):
@@ -1741,7 +1640,6 @@ class Problem(ProblemAspect):
         self.is_scoring = (self.config.get('type') == 'scoring')
         self.input_format_validators = InputFormatValidators(self)
         self.output_validators = OutputValidators(self)
-        self.graders = Graders(self)
         self.testcase_by_infile: dict[str, TestCase] = {}
         self.testdata = TestCaseGroup(self, os.path.join(self.probdir, 'data'))
         self.submissions = Submissions(self)
@@ -1768,7 +1666,6 @@ class Problem(ProblemAspect):
                 'config': [self.config],
                 'statement': [self.statement, self.attachments],
                 'validators': [self.input_format_validators, self.output_validators],
-                'graders': [self.graders],
                 'generators': [self.generators],
                 'data': [self.testdata],
                 'submissions': [self.submissions],

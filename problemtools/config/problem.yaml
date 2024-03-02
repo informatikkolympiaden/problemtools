@@ -21,9 +21,7 @@ limits:
 
 keywords: ''
 
-grading:
-   objective: max
-   show_test_data_groups: False
+grading: {}
 
 languages: all
 
