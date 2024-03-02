@@ -2,19 +2,25 @@
 
 let 
     plastex = pkgs.python3.pkgs.callPackage (import ./plastex.nix) {};
+
+    checktestdata-src = pkgs.fetchFromGitHub {
+        owner = "DOMjudge";
+        repo = "checktestdata";
+        rev = "38dda218dff402a13319c552f363bbf7444ac1a1";
+        sha256 = "sha256-S23SKwiv9ou6JDrOiXS3+OuvR4aBJ6uzIff5BE2HTHE=";
+    };
 in
 
 pkgs.python3.pkgs.buildPythonApplication {
     name = "problemtools";
     format = "setuptools";
 
-    src = pkgs.fetchFromGitHub {
-        owner = "informatikkolympiaden";
-        repo = "problemtools";
-        rev = "5ebda4b41eb00a8b1699fadd96187d360d1c4bbf";
-        sha256 = "sha256-cVnr8aTIvundFLd6mV0OZh4TeJIXTwodG8vHRLLRwcQ=";
-        fetchSubmodules = true;
-    };
+    src = ../../.;
+
+    patchPhase = ''
+        mkdir -p support/checktestdata
+        cp -r ${checktestdata-src}/* support/checktestdata
+    '';
 
     doCheck = false;
 
