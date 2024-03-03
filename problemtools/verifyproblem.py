@@ -329,6 +329,8 @@ class TestCaseGroup(ProblemAspect):
 
         # For non-root groups, missing properties are inherited from the parent group
         if parent:
+            # Don't inherit grading, defaults are different per group
+            self.config['grading'] = {}
             for field, parent_value in parent.config.items():
                 if not field in self.config:
                     self.config[field] = parent_value
@@ -599,7 +601,7 @@ class TestCaseGroup(ProblemAspect):
                 elif all([subres.verdict not in ['AC', 'PAC'] for subres in sub_results]):
                     res.verdict = sub_results[0].verdict
                 else:
-                    res.verdict = 'AC'
+                    res.verdict = 'PAC'
                 res.score = sum([subres.score for subres in sub_results])
                 
             max_score = self.get_max_score()
@@ -1504,13 +1506,8 @@ class Submissions(ProblemAspect):
     def check_submission(self, sub, args: argparse.Namespace, expected_verdict: Verdict, timelim: int, timelim_low: int, timelim_high: int) -> SubmissionResult:
         desc = f'{expected_verdict} submission {sub}'
         partial = False
-        if expected_verdict == 'PAC':
-            # For partially accepted solutions, use the low timelim instead of the real one,
-            # to make sure we have margin in both directions.
-            expected_verdict = 'AC'
-            partial = True
-        else:
-            timelim_low = timelim
+
+        timelim_low = timelim
 
         result, result_low, result_high = self._problem.testdata.run_submission(sub, args, timelim, timelim_low, timelim_high)
 
