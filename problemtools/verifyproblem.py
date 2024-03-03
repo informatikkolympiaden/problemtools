@@ -1559,6 +1559,8 @@ class Submissions(ProblemAspect):
 
         if 'time_for_AC_submissions' in limits:
             timelim = timelim_margin = limits['time_for_AC_submissions']
+        if 'time' in limits:
+            timelim = limits['time']
         if args.fixed_timelim is not None:
             timelim = args.fixed_timelim
             timelim_margin = int(round(timelim * safety_margin))
@@ -1597,13 +1599,18 @@ class Submissions(ProblemAspect):
                                          int(0.5 + exact_timelim * safety_margin))
                 else:
                     max_runtime_str = None
+                if 'time' in limits and limits['time'] != timelim:
+                    self.msg(f"   Solutions give timelim of {timelim} seconds, but will use limit in problem.yaml of {limits['time']} seconds instead")
+                    timelim = limits['time']
+                    timelim_margin = timelim * safety_margin
                 if args.fixed_timelim is not None and args.fixed_timelim != timelim:
                     self.msg(f"   Solutions give timelim of {timelim} seconds, but will use provided fixed limit of {args.fixed_timelim} seconds instead")
                     timelim = args.fixed_timelim
                     timelim_margin = timelim * safety_margin
 
                 self.msg(f"   Slowest AC runtime: {max_runtime_str}, setting timelim to {timelim} secs, safety margin to {timelim_margin} secs")
-            limits['time'] = timelim
+            if 'time' not in limits:
+                limits['time'] = timelim
 
         return self._check_res
 
