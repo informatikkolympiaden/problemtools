@@ -1504,9 +1504,16 @@ class Submissions(ProblemAspect):
     def __str__(self) -> str:
         return 'submissions'
 
+    def get_submission_expected_score(self, sub):
+        src = open(sub.mainfile).read()
+        score = re.search("EXPECTED SCORE: ([0-9.]+)", src)
+        if score:
+            return float(score.group(1))
+
     def check_submission(self, sub, args: argparse.Namespace, expected_verdict: Verdict, timelim: int, timelim_low: int, timelim_high: int) -> SubmissionResult:
         desc = f'{expected_verdict} submission {sub}'
         partial = False
+        expected_score = self.get_submission_expected_score(sub)
 
         timelim_low = timelim
 
@@ -1524,6 +1531,8 @@ class Submissions(ProblemAspect):
             self.warning(f'{desc} got {result}')
         elif result.verdict == expected_verdict:
             self.msg(f'   {desc} OK: {result}')
+            if expected_score and result.score != expected_score:
+                self.error(f'{desc} did not attain expected score {expected_score}')
             if (expected_verdict == 'AC' and not partial
                     and not self.fully_accepted(result)
                     and self.full_score_finite()):
