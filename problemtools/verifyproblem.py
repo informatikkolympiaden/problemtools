@@ -330,7 +330,8 @@ class TestCaseGroup(ProblemAspect):
         # For non-root groups, missing properties are inherited from the parent group
         if parent:
             # Don't inherit grading, defaults are different per group
-            self.config['grading'] = {}
+            if 'grading' not in self.config:
+                self.config['grading'] = {}
             for field, parent_value in parent.config.items():
                 if not field in self.config:
                     self.config[field] = parent_value
