@@ -19,6 +19,22 @@
             verifyproblem = pkgs.writeShellScriptBin "verifyproblem" ''
                 ${verifyproblem-env} ${verifyproblem-unwrapped} "$@"
             '';
+            nio-task-tools = pkgs.buildEnv {
+                name = "nio-task-tools";
+                paths = [
+                    inputs.self.packages.${system}.verifyproblem
+                    pkgs.pandoc
+                    (pkgs.texlive.combine {
+                        inherit (pkgs.texlive)  scheme-small lastpage;
+                    })
+                    pkgs.gnumake
+                    (pkgs.python3.withPackages (ps: [
+                        ps.igraph
+                    ]))
+                    pkgs.rustc
+                    pkgs.gcc
+                ];
+            };
         });
     };
 }
