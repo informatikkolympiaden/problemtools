@@ -25,7 +25,7 @@
                     inputs.self.packages.${system}.verifyproblem
                     pkgs.pandoc
                     (pkgs.texlive.combine {
-                        inherit (pkgs.texlive)  scheme-small lastpage pdfprivacy;
+                        inherit (pkgs.texlive)  scheme-small lastpage pdfprivacy framed;
                     })
                     pkgs.gnumake
                     (pkgs.python3.withPackages (ps: [
