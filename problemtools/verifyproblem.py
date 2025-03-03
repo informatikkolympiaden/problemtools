@@ -161,6 +161,9 @@ class TestCase(ProblemAspect):
     def is_in_sample_group(self) -> bool:
         return self.strip_path_prefix(self.infile).startswith('sample')
 
+    def full_score(self) -> float:
+        return self.testcasegroup.testcase_score()
+
     def check(self, args: argparse.Namespace) -> bool:
         if self._check_res is not None:
             return self._check_res
@@ -357,7 +360,7 @@ class TestCaseGroup(ProblemAspect):
                         self._items.append(TestCase(problem, base, self))
 
         # Set default grading options
-        if self._problem.config.get('type') == 'scoring':
+        if self._problem.is_scoring:
             if self._is_data or self._is_secret:
                 if 'score' not in self.config['grading']:
                     self.config['grading']['score'] = 1
@@ -420,6 +423,13 @@ class TestCaseGroup(ProblemAspect):
             return sum([score for _ in self.get_testcases()] + [group.get_max_score() for group in self.get_subgroups()])
         elif self.config['grading']['aggregation'] == 'min':
             return min([score for _ in self.get_testcases()] + [group.get_max_score() for group in self.get_subgroups()])
+
+    def testcase_score(self) -> float:
+        score = self.config['grading']['score']
+        if self.config['grading']['aggregation'] == 'sum':
+            return score / len(self.get_testcases())
+        else:
+            return score
 
     def name(self) -> str:
         return os.path.basename(self._datadir)
@@ -667,17 +677,6 @@ class ProblemConfig(ProblemAspect):
             elif isinstance(default, dict) and isinstance(self._data[field], dict):
                 self._data[field] = dict(list(default.items()) + list(self._data[field].items()))
 
-        val = self._data['validation'].split()
-        self._data['validation-type'] = val[0]
-        self._data['validation-params'] = val[1:]
-
-        self._data['grading']['custom_scoring'] = False
-        for param in self._data['validation-params']:
-            if param == 'score':
-                self._data['grading']['custom_scoring'] = True
-            elif param == 'interactive':
-                pass
-
         self._data['languages'] = self._data['languages'].split()
 
     def __str__(self) -> str:
@@ -709,10 +708,6 @@ class ProblemConfig(ProblemAspect):
                 self.error(f"Field '{field}' provided in problem.yaml but is empty")
                 self._data[field] = ProblemConfig._OPTIONAL_CONFIG.get(field, '')
 
-        # Check type
-        if not self._data['type'] in ['pass-fail', 'scoring']:
-            self.error(f"Invalid value '{self._data['type']}' for type")
-
         # Check rights_owner
         if self._data['license'] == 'public domain':
             if self._data['rights_owner'].strip() != '':
@@ -734,17 +729,6 @@ class ProblemConfig(ProblemAspect):
 
         if self._data['type'] != 'pass-fail' and self._problem.testdata.has_custom_groups() and 'show_test_data_groups' not in self._origdata.get('grading', {}):
             self.warning("Problem has custom test case groups, but does not specify a value for grading.show_test_data_groups; defaulting to false")
-
-        if not self._data['validation-type'] in ['default', 'custom']:
-            self.error(f"Invalid value '{self._data['validation']}' for validation, first word must be 'default' or 'custom'")
-
-        if self._data['validation-type'] == 'default' and len(self._data['validation-params']) > 0:
-            self.error(f"Invalid value '{self._data['validation']}' for validation")
-
-        if self._data['validation-type'] == 'custom':
-            for param in self._data['validation-params']:
-                if param not in['score', 'interactive']:
-                    self.error(f"Invalid parameter '{param}' for custom validation")
 
         # Check limits
         if not isinstance(self._data['limits'], dict):
@@ -1274,9 +1258,11 @@ class OutputValidators(ProblemAspect):
     def __init__(self, problem: Problem):
         self._problem = problem
         self._validators = run.find_programs(os.path.join(problem.probdir,
-                                                          'output_validators'),
+                                                          'output_validator'),
                                              language_config=problem.language_config,
                                              work_dir=problem.tmpdir)
+
+        self.debug(f'Found {len(self._validators)} output validators')
 
 
     def __str__(self) -> str:
@@ -1293,14 +1279,6 @@ class OutputValidators(ProblemAspect):
         for v in self._validators:
             if not isinstance(v, run.BuildRun) and v.language.lang_id not in recommended_output_validator_languages:
                 self.warning('output validator language %s is not recommended' % v.language.name)
-
-        if self._problem.config.get('validation') == 'default' and self._validators:
-            self.error('There are validator programs but problem.yaml has validation = "default"')
-        elif self._problem.config.get('validation') != 'default' and not self._validators:
-            self.error('problem.yaml specifies custom validator but no validator programs found')
-
-        if self._problem.config.get('validation') == 'default' and self._default_validator is None:
-            self.error('Unable to locate default validator')
 
         for val in self._validators[:]:
             try:
@@ -1354,12 +1332,12 @@ class OutputValidators(ProblemAspect):
 
 
     def _parse_validator_results(self, val, status: int, feedbackdir, testcase: TestCase) -> SubmissionResult:
-        custom_score = self._problem.config.get('grading')['custom_scoring']
         score = None
         # TODO: would be good to have some way of displaying the feedback for debugging uses
         score_file = os.path.join(feedbackdir, 'score.txt')
-        if not custom_score and os.path.isfile(score_file):
-            return SubmissionResult('JE', reason='validator produced "score.txt" but problem does not have custom scoring activated')
+        score_multiplier_file = os.path.join(feedbackdir, 'score_multiplier.txt')
+        # if not custom_score and os.path.isfile(score_file):
+        #     return SubmissionResult('JE', reason='validator produced "score.txt" but problem does not have custom scoring activated')
 
         if not os.WIFEXITED(status):
             return SubmissionResult('JE',
@@ -1374,22 +1352,25 @@ class OutputValidators(ProblemAspect):
         if ret == 43:
             return SubmissionResult('WA', additional_info=OutputValidators.__get_feedback(feedbackdir))
 
-        if custom_score:
-            if os.path.isfile(score_file):
-                try:
-                    score_str = open(score_file).read()
-                    score = float(score_str)
-                except Exception as e:
-                    return SubmissionResult('JE', reason=f'failed to parse validator score: {e}')
-            else:
-                return SubmissionResult('JE', reason='problem has custom scoring but validator did not produce "score.txt"')
+        if os.path.isfile(score_file):
+            try:
+                score_str = open(score_file).read()
+                score = float(score_str)
+            except Exception as e:
+                return SubmissionResult('JE', reason=f'failed to parse validator score: {e}')
+        elif os.path.isfile(score_multiplier_file):
+            try:
+                score_str = open(score_multiplier_file).read()
+                score = float(score_str) * testcase.full_score()
+            except Exception as e:
+                return SubmissionResult('JE', reason=f'failed to parse validator score multiplier: {e}')
 
         return SubmissionResult('AC', score=score)
 
 
     def _actual_validators(self) -> list:
         vals = self._validators
-        if self._problem.config.get('validation') == 'default':
+        if len(vals) == 0:
             vals = [self._default_validator]
         return vals
 
@@ -1531,8 +1512,8 @@ class Submissions(ProblemAspect):
             self.warning(f'{desc} got {result}')
         elif result.verdict == expected_verdict:
             self.msg(f'   {desc} OK: {result}')
-            if expected_score and result.score != expected_score:
-                self.error(f'{desc} did not attain expected score {expected_score}')
+            if expected_score and round(result.score) != round(expected_score):
+                self.error(f'{desc} did not attain expected score {expected_score}, got {result.score}')
             if (expected_verdict == 'AC' and not partial
                     and not self.fully_accepted(result)
                     and self.full_score_finite()):
@@ -1650,8 +1631,12 @@ class Problem(ProblemAspect):
                     language_config.update({lang_id: self.language_config.get(lang_id)})
             self.language_config = language_config
 
-        self.is_interactive = 'interactive' in self.config.get('validation-params')
-        self.is_scoring = (self.config.get('type') == 'scoring')
+        problem_type = self.config.get('type')
+        if not isinstance(problem_type, list):
+            problem_type = [problem_type]
+        
+        self.is_interactive = 'interactive' in problem_type
+        self.is_scoring = 'scoring' in problem_type
         self.input_format_validators = InputFormatValidators(self)
         self.output_validators = OutputValidators(self)
         self.testcase_by_infile: dict[str, TestCase] = {}
