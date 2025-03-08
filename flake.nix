@@ -30,6 +30,7 @@
                     pkgs.gnumake
                     (pkgs.python3.withPackages (ps: [
                         ps.igraph
+                        ps.pycairo
                     ]))
                     pkgs.rustc
                     pkgs.gcc
