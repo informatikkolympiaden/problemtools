@@ -36,8 +36,6 @@
 \RequirePackage{times}            % Font choice
 \RequirePackage{amsmath}          % AMS
 \RequirePackage{amssymb}          % AMS
-\RequirePackage[OT2,T1]{fontenc}  % Cyrillic and standard % TODO: make alphabet options more general
-\RequirePackage[utf8]{inputenc}   % UTF-8 support
 \RequirePackage{fancyhdr}         % Headers
 \RequirePackage{graphicx}         % Graphics
 \RequirePackage{subfigure}        % Subfigures
@@ -50,9 +48,29 @@
 \RequirePackage{url}              % Urls
 \RequirePackage[normalem]{ulem}   % \sout
 \RequirePackage[colorlinks=true,implicit=false]{hyperref}
+\RequirePackage{longtable}        % Used by Pandoc
+\RequirePackage{booktabs}         % Used by Pandoc
 \ifplastex\else
 \RequirePackage{xstring}
 \RequirePackage{pgffor}
+% I do not understand how to do font handling well in a portable way in
+% lualatex. The default font seems to only have latin characters. If we
+% try to load a font which is not installed, rendering fails, which makes
+% problem2pdf and verifyproblem unhappy. After a lot of trial-and-error,
+% I ended up with this conditional loading of fonts (so we should degrade
+% gracefully when fonts are missing). Getting the emoji font to work was weird,
+% as apparently we need to define the fallback using lua code because the font
+% uses colors.
+\RequirePackage{fontspec}
+\RequirePackage{luacode}
+\IfFontExistsTF{CMU Serif}{
+    \IfFontExistsTF{NotoColorEmoji}{
+        \directlua{luaotfload.add_fallback("myfallback", {"NotoColorEmoji:mode=harf;"})}
+        \setmainfont{CMU Serif}[RawFeature={fallback=myfallback}]
+    }{
+        \setmainfont{CMU Serif}
+    }
+}{}
 \fi
 
 %% Commands used to set name, logo, etc of contest
@@ -61,14 +79,23 @@
 \newcommand*{\contestlogo}[1]{\def\@contestlogo{#1}}
 \newcommand*{\location}[1]{\def\@location{#1}}
 \newcommand*{\licenseblurb}[1]{\def\@licenseblurb{#1}}
-\newcommand*{\problemlanguage}[1]{\def\@problemlanguage{#1}}
+\newcommand*{\statementdirectory}[1]{\def\@statementdirectory{#1}}
+\newcommand*{\statementfilename}[1]{\def\@statementfilename{#1}}
+\newcommand*{\problemparentpath}[1]{\def\@problemparentpath{#1}}
+\newcommand*{\problemlanguage}[1]{%
+  \statementfilename{problem#1.tex}%
+  \setproblemlanguagestrings{#1}%
+}
 \contestname{}
 \contestshortname{}
 \contestlogo{}
 \location{}
 \licenseblurb{}
-\problemlanguage{}
+\statementdirectory{problem_statement} % Default to the old standard directory on the off chance someone external uses problemset.cls
+\statementfilename{}
+\problemparentpath{}
 
+\newcommand{\@problempath}[1]{\ifx\@problemparentpath\@empty#1\else\@problemparentpath/#1\fi}
 
 % Command to set a header logo
 \newsavebox{\PS@headerbox}
@@ -85,6 +112,9 @@
   \addtolength{\textheight}{-\headheight}
 }
 
+% Pandoc outputs these
+\newcommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
 
 
 % Typesetting sections in a problem
@@ -163,16 +193,17 @@
 %% Problem inclusion
 \newcommand{\includeproblem}[1]{
   \startproblem{#1}
-  \import{#1/problem_statement/}{problem\@problemlanguage.tex}
+  \import{\@problempath{#1}/\@statementdirectory/}{\@statementfilename}
+
 
   %% Automatically include samples 1..9, if enabled
   \ifplastex\else
   \if@autoincludesamples
   \foreach \SampleNum in {1,...,9} {
-    \IfFileExists{\@problemid/data/sample/\SampleNum.interaction}{
-      \displaysampleinteraction{\@problemid/data/sample/\SampleNum}
-    }{\IfFileExists{\@problemid/data/sample/\SampleNum.in}{
-        \displaysample{\@problemid/data/sample/\SampleNum}
+    \IfFileExists{\@problempath{\@problemid}/data/sample/\SampleNum.interaction}{
+      \displaysampleinteraction{\@problempath{\@problemid}/data/sample/\SampleNum}
+    }{\IfFileExists{\@problempath{\@problemid}/data/sample/\SampleNum.in}{
+        \displaysample{\@problempath{\@problemid}/data/sample/\SampleNum}
       }{}
     }
   }
@@ -204,8 +235,8 @@
       \if@problemnumbers {\huge Problem \problemnumber\\[3mm]}  \fi
       {\LARGE #1}
       \if@problemids {\\[2mm]{\Large Problem ID: #2}} \fi
-      \IfFileExists{#2/.timelimit}{
-        \openin\ps@timelimitfile=#2/.timelimit
+      \IfFileExists{\@problempath{#2}/.timelimit}{
+        \openin\ps@timelimitfile=\@problempath{#2}/.timelimit
         \read\ps@timelimitfile to\ps@timelimit
         \\[2mm]{\Large Time limit:\ps@formattime{\ps@timelimit}}
         \closein\ps@timelimitfile
@@ -220,11 +251,44 @@
 
 %% Commands related to sample data
 
-\newcommand{\sampleinputname}{Sample Input}
-\newcommand{\sampleoutputname}{Sample Output}
-\newcommand{\sampleinteractname}{Sample Interaction}
-\newcommand{\sampleinteractreadname}{Read}
-\newcommand{\sampleinteractwritename}{Write}
+% --- Translations ---
+% English (default)
+\newcommand{\@translation@en@sampleinputname}{Sample Input}
+\newcommand{\@translation@en@sampleoutputname}{Sample Output}
+\newcommand{\@translation@en@sampleinteractname}{Sample Interaction}
+\newcommand{\@translation@en@sampleinteractreadname}{Read}
+\newcommand{\@translation@en@sampleinteractwritename}{Write}
+
+% Swedish
+\newcommand{\@translation@sv@sampleinputname}{Exempel på indata}
+\newcommand{\@translation@sv@sampleoutputname}{Exempel på utdata}
+\newcommand{\@translation@sv@sampleinteractname}{Exempel på interaktion}
+\newcommand{\@translation@sv@sampleinteractreadname}{Läs}
+\newcommand{\@translation@sv@sampleinteractwritename}{Skriv}
+
+% Icelandic
+\newcommand{\@translation@is@sampleinputname}{Sýniinntak}
+\newcommand{\@translation@is@sampleoutputname}{Sýniúttak}
+\newcommand{\@translation@is@sampleinteractname}{Sýnisamskipti}
+\newcommand{\@translation@is@sampleinteractreadname}{Lestur}
+\newcommand{\@translation@is@sampleinteractwritename}{Skrif}
+% --- End Translations ---
+
+\newcommand{\setproblemlanguagestrings}[1]{%
+  \expandafter\ifx\csname @translation@#1@sampleinputname\endcsname\relax
+    % Language not found, default to English
+    \def\problemlanguageis{en}%
+  \else
+    % Language found
+    \def\problemlanguageis{#1}%
+  \fi
+  \expandafter\let\expandafter\sampleinputname\csname @translation@\problemlanguageis @sampleinputname\endcsname
+  \expandafter\let\expandafter\sampleoutputname\csname @translation@\problemlanguageis @sampleoutputname\endcsname
+  \expandafter\let\expandafter\sampleinteractname\csname @translation@\problemlanguageis @sampleinteractname\endcsname
+  \expandafter\let\expandafter\sampleinteractreadname\csname @translation@\problemlanguageis @sampleinteractreadname\endcsname
+  \expandafter\let\expandafter\sampleinteractwritename\csname @translation@\problemlanguageis @sampleinteractwritename\endcsname
+}
+\setproblemlanguagestrings{en}
 
 \newcommand{\formatsampleheader}[1]{\textsf{\textbf{#1}}}
 
@@ -235,11 +299,11 @@
 %% Define the command used to give sample data
 %% Takes filename as parameter
 \newcommand{\includesample}[1]{
-  \IfFileExists{\@problemid/data/sample/#1.interaction}{
-    \displaysampleinteraction{\@problemid/data/sample/#1}
+  \IfFileExists{\@problempath{\@problemid}/data/sample/#1.interaction}{
+    \displaysampleinteraction{\@problempath{\@problemid}/data/sample/#1}
   }{
-    \IfFileExists{\@problemid/data/sample/#1.in}{
-      \displaysample{\@problemid/data/sample/#1}
+    \IfFileExists{\@problempath{\@problemid}/data/sample/#1.in}{
+      \displaysample{\@problempath{\@problemid}/data/sample/#1}
     }{
       \ClassError{problemset}{Can't find any sample named #1}{}
     }
@@ -277,8 +341,8 @@
 
 \newcommand{\sampletable}[4]{
   % First find widths of the two files
-  \savebox{\PS@sampleinbox}{\lstinputlisting[inputencoding=utf8/latin1,basicstyle=\ttfamily]{#2}}
-  \savebox{\PS@sampleoutbox}{\lstinputlisting[inputencoding=utf8/latin1,basicstyle=\ttfamily]{#4}}
+  \savebox{\PS@sampleinbox}{\lstinputlisting[inputencoding=utf8,basicstyle=\ttfamily]{#2}}
+  \savebox{\PS@sampleoutbox}{\lstinputlisting[inputencoding=utf8,basicstyle=\ttfamily]{#4}}
   \settowidth{\PS@sampleoutwidth}{\usebox{\PS@sampleoutbox}}
   \settowidth{\PS@sampleinwidth}{\usebox{\PS@sampleinbox}}
   \setlength{\PS@sampletotwidth}{\PS@sampleinwidth}
@@ -355,7 +419,7 @@
         \hline
         \parbox[t]{0.55\textwidth}{
           \vspace{-0.49cm}
-          \lstinputlisting[inputencoding=utf8/latin1,basicstyle=\ttfamily]{\jobname.pstmp}
+          \lstinputlisting[inputencoding=utf8,basicstyle=\ttfamily]{\jobname.pstmp}
           \vspace{-0.21cm}
         }\\
         \hline

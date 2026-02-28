@@ -209,7 +209,7 @@ prolog:
 
 # Python2 with shebang comes before default python3.
 python2_with_shebang:
-    name: 'Python 2'
+    name: 'Python 2 (w/PyPy)'
     priority: 860
     files: '*.py *.py2'
     shebang: '^#!.*python2\b'
@@ -217,7 +217,7 @@ python2_with_shebang:
     run: '/usr/bin/env python2 "{mainfile}"'
 
 python3:
-    name: 'Python 3'
+    name: 'Python 3 (w/PyPy3)'
     priority: 850
     files: '*.py *.py3'
     compile: '/usr/bin/env python3 -m py_compile {files}'
@@ -225,7 +225,7 @@ python3:
 
 # Python2 without shebang comes after python3.
 python2:
-    name: 'Python 2'
+    name: 'Python 2 (w/PyPy)'
     priority: 840
     files: '*.py2'
     compile: '/usr/bin/env python2 -m py_compile {files}'
