@@ -1387,48 +1387,74 @@ class OutputValidators(ProblemAspect):
         validator_args = [testcase.infile, testcase.ansfile, '<feedbackdir>']
         submission_args = submission.get_runcmd(memlim=self._problem.config.get('limits')['memory'])
 
+        validation_passes = 2
+        multipass = self._problem.is_multipass
+        if "validation_passes" in self._problem.config.get("limits"):
+            validation_passes = self._problem.config.get("limits")["validation_passes"]
+
         val_timelim = self._problem.config.get('limits')['validation_time']
         val_memlim = self._problem.config.get('limits')['validation_memory']
         for val in self._actual_validators():
             if val is not None and val.compile()[0]:
                 feedbackdir = tempfile.mkdtemp(prefix='feedback', dir=self._problem.tmpdir)
                 validator_args[2] = feedbackdir + os.sep
-                f = tempfile.NamedTemporaryFile(delete=False)
-                interactive_out = f.name
-                f.close()
-                i_status, _ = interactive.run(outfile=interactive_out,
-                                              args=initargs + val.get_runcmd(memlim=val_memlim) + validator_args + [';'] + submission_args)
-                if is_RTE(i_status):
-                    errorhandler.error(f'Interactive crashed, status {i_status}')
-                else:
-                    interactive_output = open(interactive_out).read()
-                    errorhandler.debug(f'Interactive output: "{interactive_output}"')
-                    if not re.match(interactive_output_re, interactive_output):
-                        errorhandler.error(f'Output from interactive does not follow expected format, got output "{interactive_output}"')
-                    else:
-                        val_status_str, _, sub_status_str, sub_runtime_str, first = interactive_output.split()
-                        sub_status = int(sub_status_str)
-                        sub_runtime = float(sub_runtime_str)
-                        val_status = int(val_status_str)
-                        val_JE = not os.WIFEXITED(val_status) or os.WEXITSTATUS(val_status) not in [42, 43]
-                        val_WA = os.WIFEXITED(val_status) and os.WEXITSTATUS(val_status) == 43
-                        if val_JE or (val_WA and first == 'validator'):
-                            # If the validator crashed, or exited first with WA,
-                            # always follow validator verdict, even if that early
-                            # exit caused the submission to behave erratically and
-                            # time out.
-                            if sub_runtime > timelim:
-                                sub_runtime = timelim
-                            res = self._parse_validator_results(val, val_status, feedbackdir, testcase)
-                        elif is_TLE(sub_status, True):
-                            res = SubmissionResult('TLE')
-                        elif is_RTE(sub_status):
-                            res = SubmissionResult('RTE')
-                        else:
-                            res = self._parse_validator_results(val, val_status, feedbackdir, testcase)
+                multipassdir = None
 
-                        res.runtime = sub_runtime
-                        res.validator_first = (first == 'validator')
+                for current_pass in range(validation_passes):
+                    f = tempfile.NamedTemporaryFile(delete=False)
+                    interactive_out = f.name
+                    f.close()
+                    i_status, _ = interactive.run(outfile=interactive_out,
+                                                args=initargs + val.get_runcmd(memlim=val_memlim) + validator_args + [';'] + submission_args)
+                    if is_RTE(i_status):
+                        errorhandler.error(f'Interactive crashed, status {i_status}')
+                    else:
+                        interactive_output = open(interactive_out).read()
+                        errorhandler.debug(f'Interactive output: "{interactive_output}"')
+                        if not re.match(interactive_output_re, interactive_output):
+                            errorhandler.error(f'Output from interactive does not follow expected format, got output "{interactive_output}"')
+                        else:
+                            val_status_str, _, sub_status_str, sub_runtime_str, first = interactive_output.split()
+                            sub_status = int(sub_status_str)
+                            sub_runtime = float(sub_runtime_str)
+                            val_status = int(val_status_str)
+                            val_JE = not os.WIFEXITED(val_status) or os.WEXITSTATUS(val_status) not in [42, 43]
+                            val_WA = os.WIFEXITED(val_status) and os.WEXITSTATUS(val_status) == 43
+                            if val_JE or (val_WA and first == 'validator'):
+                                # If the validator crashed, or exited first with WA,
+                                # always follow validator verdict, even if that early
+                                # exit caused the submission to behave erratically and
+                                # time out.
+                                if sub_runtime > timelim:
+                                    sub_runtime = timelim
+                                res = self._parse_validator_results(val, val_status, feedbackdir, testcase)
+                            elif is_TLE(sub_status, True):
+                                res = SubmissionResult('TLE')
+                            elif is_RTE(sub_status):
+                                res = SubmissionResult('RTE')
+                            else:
+                                res = self._parse_validator_results(val, val_status, feedbackdir, testcase)
+
+                            res.runtime = sub_runtime
+                            res.validator_first = (first == 'validator')
+
+                    if multipassdir != None:
+                        shutil.rmtree(multipassdir)
+                        multipassdir = None
+
+                    nextpass_file = os.path.join(feedbackdir, "nextpass.in")
+                    if os.path.isfile(nextpass_file):
+                        if not multipass or res.verdict == "WA" or current_pass + 1 == validation_passes:
+                            res = SubmissionResult("JE", reason="output validator created nextpass.in when it should not have")
+                            break
+                        if res.verdict != "AC":
+                            break
+                        multipassdir = tempfile.mkdtemp(prefix="multipass", dir=self._problem.tmpdir)
+                        nextpass_input = os.path.join(multipassdir, "nextpass.in")
+                        shutil.move(nextpass_file, nextpass_input)
+                        validator_args[0] = nextpass_input
+                    else:
+                        break
 
                 os.unlink(interactive_out)
                 shutil.rmtree(feedbackdir)
@@ -1637,6 +1663,7 @@ class Problem(ProblemAspect):
         
         self.is_interactive = 'interactive' in problem_type
         self.is_scoring = 'scoring' in problem_type
+        self.is_multipass = 'multipass' in problem_type
         self.input_format_validators = InputFormatValidators(self)
         self.output_validators = OutputValidators(self)
         self.testcase_by_infile: dict[str, TestCase] = {}
