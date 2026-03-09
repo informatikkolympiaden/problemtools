@@ -252,16 +252,19 @@ class TestCase(ProblemAspect):
         if self._problem.is_interactive:
             res_high = self._problem.output_validators.validate_interactive(self, sub, timelim_high, self._problem.submissions)
         else:
-            status, runtime = sub.run(self.infile, outfile,
-                                      timelim=timelim_high+1,
-                                      memlim=self._problem.config.get('limits')['memory'], set_work_dir=True)
-            if is_TLE(status) or runtime > timelim_high:
-                res_high = SubmissionResult('TLE')
-            elif is_RTE(status):
-                res_high = SubmissionResult('RTE')
+            if self._problem.is_multipass:
+                res_high = self._problem.output_validators.validate_noninteractive_multipass(self, sub, timelim_high)
             else:
-                res_high = self._problem.output_validators.validate(self, outfile)
-            res_high.runtime = runtime
+                status, runtime = sub.run(self.infile, outfile,
+                                        timelim=timelim_high+1,
+                                        memlim=self._problem.config.get('limits')['memory'], set_work_dir=True)
+                if is_TLE(status) or runtime > timelim_high:
+                    res_high = SubmissionResult('TLE')
+                elif is_RTE(status):
+                    res_high = SubmissionResult('RTE')
+                else:
+                    res_high = self._problem.output_validators.validate(self, outfile)
+                res_high.runtime = runtime
         if sys.stdout.isatty():
             sys.stdout.write('\b \b' * (len(msg)))
         if res_high.runtime <= timelim_low:
@@ -1486,6 +1489,75 @@ class OutputValidators(ProblemAspect):
                                           args=[testcase.infile, testcase.ansfile, feedbackdir] + flags,
                                           timelim=val_timelim, memlim=val_memlim)
                 res = self._parse_validator_results(val, status, feedbackdir, testcase)
+                shutil.rmtree(feedbackdir)
+                if res.verdict != 'AC':
+                    return res
+
+        # TODO: check that all output validators give same result
+        return res
+    
+    def validate_noninteractive_multipass(self, testcase: TestCase, submission, timelim: int) -> SubmissionResult:
+        res = SubmissionResult('JE')
+        val_timelim = self._problem.config.get('limits')['validation_time']
+        val_memlim = self._problem.config.get('limits')['validation_memory']
+        flags = self._problem.config.get('validator_flags').split() + testcase.testcasegroup.config['output_validator_flags'].split()
+
+        validation_passes = 2
+        multipass = self._problem.is_multipass
+        if "validation_passes" in self._problem.config.get("limits"):
+            validation_passes = self._problem.config.get("limits")["validation_passes"]
+
+        submission_output = os.path.join(self._problem.tmpdir, 'output')
+        submission_input = testcase.infile
+
+        for val in self._actual_validators():
+            if val is not None and val.compile()[0]:
+                feedbackdir = tempfile.mkdtemp(prefix='feedback', dir=self._problem.tmpdir)
+
+                # Directory for input for the nextpass
+                multipassdir = None
+
+                for current_pass in range(validation_passes):
+
+                    status, runtime = submission.run(submission_input, submission_output,
+                                            timelim=timelim+1,
+                                            memlim=self._problem.config.get('limits')['memory'], set_work_dir=True)
+                    if is_TLE(status) or runtime > timelim:
+                        res = SubmissionResult('TLE')
+                    elif is_RTE(status):
+                        res = SubmissionResult('RTE')
+                    else:
+                        val_status, val_runtime = val.run(submission_output,
+                                                args=[submission_input, testcase.ansfile, feedbackdir] + flags,
+                                                timelim=val_timelim, memlim=val_memlim)
+                        res = self._parse_validator_results(val, val_status, feedbackdir, testcase)
+                    res.runtime = runtime
+
+                    # Remove the nextpass input directory if one was created
+                    if multipassdir != None:
+                        shutil.rmtree(multipassdir)
+                        multipassdir = None
+
+                    # If no nextpass file is created, we end the loop
+                    nextpass_file = os.path.join(feedbackdir, "nextpass.in")
+                    if not os.path.isfile(nextpass_file):
+                        break
+
+                    # Nextpass file exists. This is only allowed if we are using multipass grading,
+                    # there are remaining validation passes and the previous grader exited successfully
+                    if not multipass or res.verdict == "WA" or current_pass + 1 == validation_passes:
+                        res = SubmissionResult("JE", reason="output validator created nextpass.in when it should not have")
+                        break
+
+                    # We break if the verdict is not AC
+                    if res.verdict != "AC":
+                        break
+
+                    # Before the next pass, we prepare input for the validator
+                    multipassdir = tempfile.mkdtemp(prefix="multipass", dir=self._problem.tmpdir)
+                    submission_input = os.path.join(multipassdir, "nextpass.in")
+                    shutil.move(nextpass_file, submission_input)
+
                 shutil.rmtree(feedbackdir)
                 if res.verdict != 'AC':
                     return res
