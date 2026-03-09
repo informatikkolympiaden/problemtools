@@ -1398,6 +1398,8 @@ class OutputValidators(ProblemAspect):
             if val is not None and val.compile()[0]:
                 feedbackdir = tempfile.mkdtemp(prefix='feedback', dir=self._problem.tmpdir)
                 validator_args[2] = feedbackdir + os.sep
+
+                # Directory for input for the nextpass
                 multipassdir = None
 
                 for current_pass in range(validation_passes):
@@ -1438,23 +1440,31 @@ class OutputValidators(ProblemAspect):
                             res.runtime = sub_runtime
                             res.validator_first = (first == 'validator')
 
+                    # Remove the nextpass input directory if one was created
                     if multipassdir != None:
                         shutil.rmtree(multipassdir)
                         multipassdir = None
 
+                    # If no nextpass file is created, we end the loop
                     nextpass_file = os.path.join(feedbackdir, "nextpass.in")
-                    if os.path.isfile(nextpass_file):
-                        if not multipass or res.verdict == "WA" or current_pass + 1 == validation_passes:
-                            res = SubmissionResult("JE", reason="output validator created nextpass.in when it should not have")
-                            break
-                        if res.verdict != "AC":
-                            break
-                        multipassdir = tempfile.mkdtemp(prefix="multipass", dir=self._problem.tmpdir)
-                        nextpass_input = os.path.join(multipassdir, "nextpass.in")
-                        shutil.move(nextpass_file, nextpass_input)
-                        validator_args[0] = nextpass_input
-                    else:
+                    if not os.path.isfile(nextpass_file):
                         break
+
+                    # Nextpass file exists. This is only allowed if we are using multipass grading,
+                    # there are remaining validation passes and the previous grader exited successfully
+                    if not multipass or res.verdict == "WA" or current_pass + 1 == validation_passes:
+                        res = SubmissionResult("JE", reason="output validator created nextpass.in when it should not have")
+                        break
+
+                    # We break if the verdict is not AC
+                    if res.verdict != "AC":
+                        break
+
+                    # Before the next pass, we prepare input for the validator
+                    multipassdir = tempfile.mkdtemp(prefix="multipass", dir=self._problem.tmpdir)
+                    nextpass_input = os.path.join(multipassdir, "nextpass.in")
+                    shutil.move(nextpass_file, nextpass_input)
+                    validator_args[0] = nextpass_input
 
                 os.unlink(interactive_out)
                 shutil.rmtree(feedbackdir)
