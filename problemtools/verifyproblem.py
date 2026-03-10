@@ -252,16 +252,19 @@ class TestCase(ProblemAspect):
         if self._problem.is_interactive:
             res_high = self._problem.output_validators.validate_interactive(self, sub, timelim_high, self._problem.submissions)
         else:
-            status, runtime = sub.run(self.infile, outfile,
-                                      timelim=timelim_high+1,
-                                      memlim=self._problem.config.get('limits')['memory'], set_work_dir=True)
-            if is_TLE(status) or runtime > timelim_high:
-                res_high = SubmissionResult('TLE')
-            elif is_RTE(status):
-                res_high = SubmissionResult('RTE')
+            if self._problem.is_multipass:
+                res_high = self._problem.output_validators.validate_noninteractive_multipass(self, sub, timelim_high)
             else:
-                res_high = self._problem.output_validators.validate(self, outfile)
-            res_high.runtime = runtime
+                status, runtime = sub.run(self.infile, outfile,
+                                        timelim=timelim_high+1,
+                                        memlim=self._problem.config.get('limits')['memory'], set_work_dir=True)
+                if is_TLE(status) or runtime > timelim_high:
+                    res_high = SubmissionResult('TLE')
+                elif is_RTE(status):
+                    res_high = SubmissionResult('RTE')
+                else:
+                    res_high = self._problem.output_validators.validate(self, outfile)
+                res_high.runtime = runtime
         if sys.stdout.isatty():
             sys.stdout.write('\b \b' * (len(msg)))
         if res_high.runtime <= timelim_low:
@@ -1374,6 +1377,11 @@ class OutputValidators(ProblemAspect):
             vals = [self._default_validator]
         return vals
 
+    def num_validation_passes(self) -> int:
+        validation_passes = 2
+        if "validation_passes" in self._problem.config.get("limits"):
+            validation_passes = self._problem.config.get("limits")["validation_passes"]
+        return validation_passes
 
     def validate_interactive(self, testcase: TestCase, submission, timelim: int, errorhandler: Submissions) -> SubmissionResult:
         interactive_output_re = r'\d+ \d+\.\d+ \d+ \d+\.\d+ (validator|submission)'
@@ -1382,53 +1390,82 @@ class OutputValidators(ProblemAspect):
         if interactive is None:
             errorhandler.error('Could not locate interactive runner')
             return res
-        # file descriptor, wall time lim
-        initargs = ['1', str(2 * timelim)]
-        validator_args = [testcase.infile, testcase.ansfile, '<feedbackdir>']
-        submission_args = submission.get_runcmd(memlim=self._problem.config.get('limits')['memory'])
+
+        validation_passes = self.num_validation_passes()
+        multipass = self._problem.is_multipass
 
         val_timelim = self._problem.config.get('limits')['validation_time']
         val_memlim = self._problem.config.get('limits')['validation_memory']
         for val in self._actual_validators():
             if val is not None and val.compile()[0]:
                 feedbackdir = tempfile.mkdtemp(prefix='feedback', dir=self._problem.tmpdir)
-                validator_args[2] = feedbackdir + os.sep
-                f = tempfile.NamedTemporaryFile(delete=False)
-                interactive_out = f.name
-                f.close()
-                i_status, _ = interactive.run(outfile=interactive_out,
-                                              args=initargs + val.get_runcmd(memlim=val_memlim) + validator_args + [';'] + submission_args)
-                if is_RTE(i_status):
-                    errorhandler.error(f'Interactive crashed, status {i_status}')
-                else:
-                    interactive_output = open(interactive_out).read()
-                    errorhandler.debug(f'Interactive output: "{interactive_output}"')
-                    if not re.match(interactive_output_re, interactive_output):
-                        errorhandler.error(f'Output from interactive does not follow expected format, got output "{interactive_output}"')
-                    else:
-                        val_status_str, _, sub_status_str, sub_runtime_str, first = interactive_output.split()
-                        sub_status = int(sub_status_str)
-                        sub_runtime = float(sub_runtime_str)
-                        val_status = int(val_status_str)
-                        val_JE = not os.WIFEXITED(val_status) or os.WEXITSTATUS(val_status) not in [42, 43]
-                        val_WA = os.WIFEXITED(val_status) and os.WEXITSTATUS(val_status) == 43
-                        if val_JE or (val_WA and first == 'validator'):
-                            # If the validator crashed, or exited first with WA,
-                            # always follow validator verdict, even if that early
-                            # exit caused the submission to behave erratically and
-                            # time out.
-                            if sub_runtime > timelim:
-                                sub_runtime = timelim
-                            res = self._parse_validator_results(val, val_status, feedbackdir, testcase)
-                        elif is_TLE(sub_status, True):
-                            res = SubmissionResult('TLE')
-                        elif is_RTE(sub_status):
-                            res = SubmissionResult('RTE')
-                        else:
-                            res = self._parse_validator_results(val, val_status, feedbackdir, testcase)
 
-                        res.runtime = sub_runtime
-                        res.validator_first = (first == 'validator')
+                initargs = ['1', str(2 * timelim)]
+                validator_args = [testcase.infile, testcase.ansfile, feedbackdir + os.sep]
+                submission_args = submission.get_runcmd(memlim=self._problem.config.get('limits')['memory'])
+
+                nextpass_input = os.path.join(self._problem.tmpdir, "nextpass")
+
+                for current_pass in range(validation_passes):
+                    f = tempfile.NamedTemporaryFile(delete=False)
+                    interactive_out = f.name
+                    f.close()
+                    i_status, _ = interactive.run(outfile=interactive_out,
+                                                args=initargs + val.get_runcmd(memlim=val_memlim) + validator_args + [';'] + submission_args)
+                    if is_RTE(i_status):
+                        errorhandler.error(f'Interactive crashed, status {i_status}')
+                    else:
+                        interactive_output = open(interactive_out).read()
+                        errorhandler.debug(f'Interactive output: "{interactive_output}"')
+                        if not re.match(interactive_output_re, interactive_output):
+                            errorhandler.error(f'Output from interactive does not follow expected format, got output "{interactive_output}"')
+                        else:
+                            val_status_str, _, sub_status_str, sub_runtime_str, first = interactive_output.split()
+                            sub_status = int(sub_status_str)
+                            sub_runtime = float(sub_runtime_str)
+                            val_status = int(val_status_str)
+                            val_JE = not os.WIFEXITED(val_status) or os.WEXITSTATUS(val_status) not in [42, 43]
+                            val_WA = os.WIFEXITED(val_status) and os.WEXITSTATUS(val_status) == 43
+                            if val_JE or (val_WA and first == 'validator'):
+                                # If the validator crashed, or exited first with WA,
+                                # always follow validator verdict, even if that early
+                                # exit caused the submission to behave erratically and
+                                # time out.
+                                if sub_runtime > timelim:
+                                    sub_runtime = timelim
+                                res = self._parse_validator_results(val, val_status, feedbackdir, testcase)
+                            elif is_TLE(sub_status, True):
+                                res = SubmissionResult('TLE')
+                            elif is_RTE(sub_status):
+                                res = SubmissionResult('RTE')
+                            else:
+                                res = self._parse_validator_results(val, val_status, feedbackdir, testcase)
+
+                            res.runtime = sub_runtime
+                            res.validator_first = (first == 'validator')
+
+                    # Remove the nextpass input if created
+                    if os.path.isfile(nextpass_input):
+                        os.remove(nextpass_input)
+
+                    # If no nextpass file is created, we end the loop
+                    nextpass_file = os.path.join(feedbackdir, "nextpass.in")
+                    if not os.path.isfile(nextpass_file):
+                        break
+
+                    # Nextpass file exists. This is only allowed if we are using multipass grading,
+                    # there are remaining validation passes and the previous grader exited successfully
+                    if not multipass or res.verdict == "WA" or current_pass + 1 == validation_passes:
+                        res = SubmissionResult("JE", reason="output validator created nextpass.in when it should not have")
+                        break
+
+                    # We break if the verdict is not AC
+                    if res.verdict != "AC":
+                        break
+
+                    # Before the next pass, we prepare input for the validator
+                    shutil.move(nextpass_file, nextpass_input)
+                    validator_args[0] = nextpass_input
 
                 os.unlink(interactive_out)
                 shutil.rmtree(feedbackdir)
@@ -1450,6 +1487,69 @@ class OutputValidators(ProblemAspect):
                                           args=[testcase.infile, testcase.ansfile, feedbackdir] + flags,
                                           timelim=val_timelim, memlim=val_memlim)
                 res = self._parse_validator_results(val, status, feedbackdir, testcase)
+                shutil.rmtree(feedbackdir)
+                if res.verdict != 'AC':
+                    return res
+
+        # TODO: check that all output validators give same result
+        return res
+    
+    def validate_noninteractive_multipass(self, testcase: TestCase, submission, timelim: int) -> SubmissionResult:
+        res = SubmissionResult('JE')
+        val_timelim = self._problem.config.get('limits')['validation_time']
+        val_memlim = self._problem.config.get('limits')['validation_memory']
+        flags = self._problem.config.get('validator_flags').split() + testcase.testcasegroup.config['output_validator_flags'].split()
+
+        validation_passes = self.num_validation_passes()
+
+        for val in self._actual_validators():
+            if val is not None and val.compile()[0]:
+                submission_output = os.path.join(self._problem.tmpdir, 'output')
+                submission_input = testcase.infile
+
+                feedbackdir = tempfile.mkdtemp(prefix='feedback', dir=self._problem.tmpdir)
+
+                nextpass_input = os.path.join(self._problem.tmpdir, "nextpass")
+
+                for current_pass in range(validation_passes):
+
+                    status, runtime = submission.run(submission_input, submission_output,
+                                            timelim=timelim+1,
+                                            memlim=self._problem.config.get('limits')['memory'], set_work_dir=True)
+                    if is_TLE(status) or runtime > timelim:
+                        res = SubmissionResult('TLE')
+                    elif is_RTE(status):
+                        res = SubmissionResult('RTE')
+                    else:
+                        val_status, val_runtime = val.run(submission_output,
+                                                args=[submission_input, testcase.ansfile, feedbackdir] + flags,
+                                                timelim=val_timelim, memlim=val_memlim)
+                        res = self._parse_validator_results(val, val_status, feedbackdir, testcase)
+                    res.runtime = runtime
+
+                    # Remove the nextpass input if created
+                    if os.path.isfile(nextpass_input):
+                        os.remove(nextpass_input)
+
+                    # If no nextpass file is created, we end the loop
+                    nextpass_file = os.path.join(feedbackdir, "nextpass.in")
+                    if not os.path.isfile(nextpass_file):
+                        break
+
+                    # Nextpass file exists. This is only allowed if there are remaining 
+                    # validation passes and the previous grader exited successfully
+                    if res.verdict == "WA" or current_pass + 1 == validation_passes:
+                        res = SubmissionResult("JE", reason="output validator created nextpass.in when it should not have")
+                        break
+
+                    # We break if the verdict is not AC
+                    if res.verdict != "AC":
+                        break
+
+                    # Before the next pass, we prepare input for the validator
+                    submission_input = nextpass_input
+                    shutil.move(nextpass_file, submission_input)
+
                 shutil.rmtree(feedbackdir)
                 if res.verdict != 'AC':
                     return res
@@ -1637,6 +1737,7 @@ class Problem(ProblemAspect):
         
         self.is_interactive = 'interactive' in problem_type
         self.is_scoring = 'scoring' in problem_type
+        self.is_multipass = 'multipass' in problem_type
         self.input_format_validators = InputFormatValidators(self)
         self.output_validators = OutputValidators(self)
         self.testcase_by_infile: dict[str, TestCase] = {}
