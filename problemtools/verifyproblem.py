@@ -1377,6 +1377,11 @@ class OutputValidators(ProblemAspect):
             vals = [self._default_validator]
         return vals
 
+    def num_validation_passes(self) -> int:
+        validation_passes = 2
+        if "validation_passes" in self._problem.config.get("limits"):
+            validation_passes = self._problem.config.get("limits")["validation_passes"]
+        return validation_passes
 
     def validate_interactive(self, testcase: TestCase, submission, timelim: int, errorhandler: Submissions) -> SubmissionResult:
         interactive_output_re = r'\d+ \d+\.\d+ \d+ \d+\.\d+ (validator|submission)'
@@ -1385,25 +1390,21 @@ class OutputValidators(ProblemAspect):
         if interactive is None:
             errorhandler.error('Could not locate interactive runner')
             return res
-        # file descriptor, wall time lim
-        initargs = ['1', str(2 * timelim)]
-        validator_args = [testcase.infile, testcase.ansfile, '<feedbackdir>']
-        submission_args = submission.get_runcmd(memlim=self._problem.config.get('limits')['memory'])
 
-        validation_passes = 2
+        validation_passes = self.num_validation_passes()
         multipass = self._problem.is_multipass
-        if "validation_passes" in self._problem.config.get("limits"):
-            validation_passes = self._problem.config.get("limits")["validation_passes"]
 
         val_timelim = self._problem.config.get('limits')['validation_time']
         val_memlim = self._problem.config.get('limits')['validation_memory']
         for val in self._actual_validators():
             if val is not None and val.compile()[0]:
                 feedbackdir = tempfile.mkdtemp(prefix='feedback', dir=self._problem.tmpdir)
-                validator_args[2] = feedbackdir + os.sep
 
-                # Directory for input for the nextpass
-                multipassdir = None
+                initargs = ['1', str(2 * timelim)]
+                validator_args = [testcase.infile, testcase.ansfile, feedbackdir + os.sep]
+                submission_args = submission.get_runcmd(memlim=self._problem.config.get('limits')['memory'])
+
+                nextpass_input = os.path.join(self._problem.tmpdir, "nextpass")
 
                 for current_pass in range(validation_passes):
                     f = tempfile.NamedTemporaryFile(delete=False)
@@ -1443,10 +1444,9 @@ class OutputValidators(ProblemAspect):
                             res.runtime = sub_runtime
                             res.validator_first = (first == 'validator')
 
-                    # Remove the nextpass input directory if one was created
-                    if multipassdir != None:
-                        shutil.rmtree(multipassdir)
-                        multipassdir = None
+                    # Remove the nextpass input if created
+                    if os.path.isfile(nextpass_input):
+                        os.remove(nextpass_input)
 
                     # If no nextpass file is created, we end the loop
                     nextpass_file = os.path.join(feedbackdir, "nextpass.in")
@@ -1464,8 +1464,6 @@ class OutputValidators(ProblemAspect):
                         break
 
                     # Before the next pass, we prepare input for the validator
-                    multipassdir = tempfile.mkdtemp(prefix="multipass", dir=self._problem.tmpdir)
-                    nextpass_input = os.path.join(multipassdir, "nextpass.in")
                     shutil.move(nextpass_file, nextpass_input)
                     validator_args[0] = nextpass_input
 
@@ -1502,20 +1500,16 @@ class OutputValidators(ProblemAspect):
         val_memlim = self._problem.config.get('limits')['validation_memory']
         flags = self._problem.config.get('validator_flags').split() + testcase.testcasegroup.config['output_validator_flags'].split()
 
-        validation_passes = 2
-        multipass = self._problem.is_multipass
-        if "validation_passes" in self._problem.config.get("limits"):
-            validation_passes = self._problem.config.get("limits")["validation_passes"]
-
-        submission_output = os.path.join(self._problem.tmpdir, 'output')
-        submission_input = testcase.infile
+        validation_passes = self.num_validation_passes()
 
         for val in self._actual_validators():
             if val is not None and val.compile()[0]:
+                submission_output = os.path.join(self._problem.tmpdir, 'output')
+                submission_input = testcase.infile
+
                 feedbackdir = tempfile.mkdtemp(prefix='feedback', dir=self._problem.tmpdir)
 
-                # Directory for input for the nextpass
-                multipassdir = None
+                nextpass_input = os.path.join(self._problem.tmpdir, "nextpass")
 
                 for current_pass in range(validation_passes):
 
@@ -1533,19 +1527,18 @@ class OutputValidators(ProblemAspect):
                         res = self._parse_validator_results(val, val_status, feedbackdir, testcase)
                     res.runtime = runtime
 
-                    # Remove the nextpass input directory if one was created
-                    if multipassdir != None:
-                        shutil.rmtree(multipassdir)
-                        multipassdir = None
+                    # Remove the nextpass input if created
+                    if os.path.isfile(nextpass_input):
+                        os.remove(nextpass_input)
 
                     # If no nextpass file is created, we end the loop
                     nextpass_file = os.path.join(feedbackdir, "nextpass.in")
                     if not os.path.isfile(nextpass_file):
                         break
 
-                    # Nextpass file exists. This is only allowed if we are using multipass grading,
-                    # there are remaining validation passes and the previous grader exited successfully
-                    if not multipass or res.verdict == "WA" or current_pass + 1 == validation_passes:
+                    # Nextpass file exists. This is only allowed if there are remaining 
+                    # validation passes and the previous grader exited successfully
+                    if res.verdict == "WA" or current_pass + 1 == validation_passes:
                         res = SubmissionResult("JE", reason="output validator created nextpass.in when it should not have")
                         break
 
@@ -1554,8 +1547,7 @@ class OutputValidators(ProblemAspect):
                         break
 
                     # Before the next pass, we prepare input for the validator
-                    multipassdir = tempfile.mkdtemp(prefix="multipass", dir=self._problem.tmpdir)
-                    submission_input = os.path.join(multipassdir, "nextpass.in")
+                    submission_input = nextpass_input
                     shutil.move(nextpass_file, submission_input)
 
                 shutil.rmtree(feedbackdir)
